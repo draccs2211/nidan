@@ -1,27 +1,10 @@
-"""
-FastAPI Application
--------------------
-Routes:
-  POST /auth/register       Register patient or doctor
-  POST /auth/login          Login → JWT token
-  GET  /doctors             List doctors (public)
-  GET  /doctors/{id}/slots  Available slots for a doctor
-  POST /chat/patient        Patient chat with agent (Scenario 1)
-  POST /chat/doctor         Doctor query with agent (Scenario 2)
-  GET  /appointments/mine   Patient's appointments
-  GET  /doctor/appointments Doctor's appointments
-  POST /doctor/summary      Trigger summary manually
-  GET  /chat/history        Get conversation history
-  DELETE /chat/session      Clear session
-  POST /seed                Seed sample data (dev only)
-"""
+
 
 import os
-import json
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import pytz
@@ -29,11 +12,12 @@ import pytz
 from models.database import get_db, create_tables, User, Doctor, AvailabilitySlot, Appointment
 from schemas import (
     UserCreate, UserLogin, Token, ChatRequest, ChatResponse,
-    SummaryRequest, SummaryResponse, AppointmentOut, DoctorProfile,
+    SummaryRequest, SummaryResponse, AppointmentOut,
 )
 from auth import hash_password, verify_password, create_access_token, get_current_user, require_role
 from agent import run_agent, clear_session, get_session_history
 from integrations.slack import send_doctor_summary_to_slack
+from mcp_server import mcp
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -41,10 +25,14 @@ load_dotenv()
 IST = pytz.timezone("Asia/Kolkata")
 
 app = FastAPI(
-    title="Doctor Appointment Agentic AI",
-    description="MCP-powered agentic appointment system using GPT-4o tool-calling",
-    version="1.0.0",
+    title="Nidan — Agentic Doctor Appointment AI",
+    description="MCP-powered agentic appointment system using GPT-4o + proper MCP protocol",
+    version="2.0.0",
 )
+
+# Mount MCP server — exposes /mcp endpoint with tools/list, tools/call
+mcp_app = mcp.get_asgi_app()
+app.mount("/mcp", mcp_app)
 
 app.add_middleware(
     CORSMiddleware,
@@ -58,10 +46,11 @@ app.add_middleware(
 @app.on_event("startup")
 def startup():
     create_tables()
-    print("✅ Database tables created/verified.")
+    print("Database tables created/verified.")
+    print("MCP Server mounted at /mcp")
 
 
-# ── Auth ─────────────────────────────────────────────────────────────────────
+# ── Auth ──────────────────────────────────────────────────────────────────────
 
 @app.post("/auth/register", response_model=Token)
 def register(payload: UserCreate, db: Session = Depends(get_db)):
@@ -118,7 +107,7 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
     )
 
 
-# ── Doctors ──────────────────────────────────────────────────────────────────
+# ── Doctors ───────────────────────────────────────────────────────────────────
 
 @app.get("/doctors")
 def list_doctors(specialization: Optional[str] = None, db: Session = Depends(get_db)):
@@ -141,7 +130,7 @@ def list_doctors(specialization: Optional[str] = None, db: Session = Depends(get
 
 @app.get("/doctors/{doctor_id}/slots")
 def get_doctor_slots(doctor_id: int, db: Session = Depends(get_db)):
-    now = datetime.now(IST)
+    now = datetime.now()
     slots = db.query(AvailabilitySlot).filter(
         AvailabilitySlot.doctor_id == doctor_id,
         AvailabilitySlot.is_available == True,
@@ -158,16 +147,15 @@ def get_doctor_slots(doctor_id: int, db: Session = Depends(get_db)):
     ]
 
 
-# ── Patient Chat ─────────────────────────────────────────────────────────────
+# ── Patient Chat (async — MCP client) ─────────────────────────────────────────
 
 @app.post("/chat/patient", response_model=ChatResponse)
-def patient_chat(
+async def patient_chat(
     req: ChatRequest,
     current_user: User = Depends(require_role("patient")),
     db: Session = Depends(get_db),
 ):
-    # Optionally wire Google integrations here if tokens are stored in DB
-    result = run_agent(
+    result = await run_agent(
         user_message=req.message,
         session_id=req.session_id,
         role="patient",
@@ -191,10 +179,10 @@ def patient_chat(
     )
 
 
-# ── Doctor Chat ──────────────────────────────────────────────────────────────
+# ── Doctor Chat (async — MCP client) ─────────────────────────────────────────
 
 @app.post("/chat/doctor", response_model=ChatResponse)
-def doctor_chat(
+async def doctor_chat(
     req: ChatRequest,
     current_user: User = Depends(require_role("doctor")),
     db: Session = Depends(get_db),
@@ -203,7 +191,7 @@ def doctor_chat(
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor profile not found.")
 
-    result = run_agent(
+    result = await run_agent(
         user_message=req.message,
         session_id=req.session_id,
         role="doctor",
@@ -211,7 +199,6 @@ def doctor_chat(
         doctor_id=doctor.id,
     )
 
-    # If summary was generated, send Slack notification
     if "get_doctor_summary" in result.get("tool_calls_made", []):
         send_doctor_summary_to_slack(
             doctor_name=current_user.full_name,
@@ -226,10 +213,10 @@ def doctor_chat(
     )
 
 
-# ── Doctor Summary (button trigger) ─────────────────────────────────────────
+# ── Doctor Summary Button (async — MCP client) ────────────────────────────────
 
 @app.post("/doctor/summary", response_model=SummaryResponse)
-def doctor_summary(
+async def doctor_summary(
     req: SummaryRequest,
     current_user: User = Depends(require_role("doctor")),
     db: Session = Depends(get_db),
@@ -238,7 +225,7 @@ def doctor_summary(
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor profile not found.")
 
-    result = run_agent(
+    result = await run_agent(
         user_message=req.query,
         session_id=None,
         role="doctor",
@@ -261,7 +248,7 @@ def doctor_summary(
     )
 
 
-# ── Appointments ─────────────────────────────────────────────────────────────
+# ── Appointments ──────────────────────────────────────────────────────────────
 
 @app.get("/appointments/mine")
 def my_appointments(
@@ -295,7 +282,7 @@ def doctor_appointments(
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor profile not found.")
 
-    now = datetime.now(IST)
+    now = datetime.now()
     appts = db.query(Appointment).filter(
         Appointment.doctor_id == doctor.id,
         Appointment.scheduled_at >= now - timedelta(days=1),
@@ -316,15 +303,11 @@ def doctor_appointments(
     return result
 
 
-# ── Chat Session ─────────────────────────────────────────────────────────────
+# ── Chat Session ──────────────────────────────────────────────────────────────
 
 @app.get("/chat/history")
-def chat_history(
-    session_id: str,
-    current_user: User = Depends(get_current_user),
-):
+def chat_history(session_id: str, current_user: User = Depends(get_current_user)):
     history = get_session_history(session_id)
-    # Strip system message, return user/assistant turns only
     return [m for m in history if m["role"] in ("user", "assistant")]
 
 
@@ -334,25 +317,22 @@ def delete_session(session_id: str, current_user: User = Depends(get_current_use
     return {"message": "Session cleared."}
 
 
-# ── Dev: Seed Data ────────────────────────────────────────────────────────────
+# ── Seed Data ─────────────────────────────────────────────────────────────────
 
 @app.post("/seed")
 def seed_data(db: Session = Depends(get_db)):
-    """Seed sample doctors, patients, and availability slots for testing."""
-    # Clear existing
     db.query(Appointment).delete()
     db.query(AvailabilitySlot).delete()
     db.query(Doctor).delete()
     db.query(User).delete()
 
-    now = datetime.now(IST)
+    now = datetime.now()
 
-    # Create doctors
     doctor_data = [
-        ("Dr. Priya Ahuja", "priya@clinic.com", "Cardiologist", 15, 800.0),
-        ("Dr. Rahul Sharma", "rahul@clinic.com", "Dermatologist", 8, 600.0),
-        ("Dr. Meena Gupta", "meena@clinic.com", "General Medicine", 12, 400.0),
-        ("Dr. Arjun Singh", "arjun@clinic.com", "Orthopedic", 10, 700.0),
+        ("Dr. Priya Ahuja",   "priya@clinic.com",  "Cardiologist",     15, 800.0),
+        ("Dr. Rahul Sharma",  "rahul@clinic.com",  "Dermatologist",     8, 600.0),
+        ("Dr. Meena Gupta",   "meena@clinic.com",  "General Medicine", 12, 400.0),
+        ("Dr. Arjun Singh",   "arjun@clinic.com",  "Orthopedic",       10, 700.0),
     ]
 
     for name, email, spec, exp, fee in doctor_data:
@@ -376,7 +356,6 @@ def seed_data(db: Session = Depends(get_db)):
         db.add(doctor)
         db.flush()
 
-        # Generate slots for next 7 days
         for day_offset in range(7):
             for hour in [9, 10, 11, 14, 15, 16, 17]:
                 slot_dt = (now + timedelta(days=day_offset)).replace(
@@ -389,7 +368,6 @@ def seed_data(db: Session = Depends(get_db)):
                     is_available=True,
                 ))
 
-    # Create sample patient
     patient = User(
         email="patient@test.com",
         hashed_password=hash_password("patient123"),
@@ -401,7 +379,7 @@ def seed_data(db: Session = Depends(get_db)):
     db.commit()
 
     return {
-        "message": "Seeded 4 doctors, 1 patient, and 7×7 availability slots.",
+        "message": "Seeded 4 doctors, 1 patient, 7x7 availability slots.",
         "patient_login": {"email": "patient@test.com", "password": "patient123"},
         "doctor_login": {"email": "priya@clinic.com", "password": "doctor123"},
     }
@@ -409,4 +387,4 @@ def seed_data(db: Session = Depends(get_db)):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "Doctor Appointment Agentic AI"}
+    return {"status": "ok", "service": "Nidan Agentic AI", "mcp_endpoint": "/mcp"}
