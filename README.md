@@ -1,6 +1,26 @@
-# MediAssist AI — Agentic Doctor Appointment System
+# NIDAN — Agentic Doctor Appointment System
 
-Full-stack agentic AI application using **GPT-4o tool-calling**, **FastAPI**, **MCP**, **PostgreSQL**, **React**, **Google Calendar**, **Gmail**, and **Slack**.
+> Full-stack agentic AI application for intelligent doctor appointment booking and patient-doctor communication.
+
+---
+
+## Overview
+
+NIDAN is an agentic AI system that handles doctor appointment scheduling through natural language. Patients and doctors interact via a conversational interface powered by GPT-4o tool-calling, which autonomously checks availability, books appointments, sends confirmations, and notifies relevant parties — all without manual coordination.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React (Vite) + Tailwind CSS |
+| Backend | FastAPI (Python) |
+| AI Agent | GPT-4o with Tool Calling |
+| Protocol | MCP (Model Context Protocol) |
+| Database | PostgreSQL |
+| Calendar | Google Calendar API |
+| Notifications | Gmail + Slack |
 
 ---
 
@@ -8,171 +28,112 @@ Full-stack agentic AI application using **GPT-4o tool-calling**, **FastAPI**, **
 
 ```
 React (Vite)
-  └── POST /chat/patient  ──►  FastAPI
-  └── POST /chat/doctor   ──►  FastAPI
-                                  └── GPT-4o (tool-calling)
-                                        ├── check_doctor_availability  → PostgreSQL
-                                        ├── book_appointment           → PostgreSQL + Google Calendar + Gmail
-                                        ├── get_doctor_summary         → PostgreSQL → Slack
-                                        ├── list_doctors               → PostgreSQL
-                                        └── cancel_appointment         → PostgreSQL
+├── POST /chat/patient  ──►  FastAPI
+└── POST /chat/doctor   ──►  FastAPI
+                                └──► GPT-4o (tool-calling)
+                                        ├── check_doctor_availability  ──► PostgreSQL
+                                        ├── book_appointment           ──► PostgreSQL
+                                        ├── send_confirmation          ──► Gmail
+                                        ├── add_to_calendar            ──► Google Calendar
+                                        └── notify_doctor              ──► Slack
 ```
 
-**MCP Tools** (defined in `mcp_tools.py`):
-| Tool | Description |
-|------|-------------|
-| `check_doctor_availability` | Fetch available slots by doctor name / specialization / date |
-| `book_appointment` | Book slot, create Google Calendar event, send Gmail confirmation |
-| `get_doctor_summary` | Aggregate appointment stats for a period with optional symptom filter |
-| `list_doctors` | List all doctors with specialization |
-| `cancel_appointment` | Cancel an appointment and free the slot |
+---
+
+## Features
+
+- **Conversational Booking** — Patients describe their symptoms/needs in natural language; the agent handles the rest
+- **Agentic Tool Calling** — GPT-4o autonomously calls backend tools to check slots, book, and confirm
+- **Dual Interface** — Separate chat flows for patients and doctors
+- **Calendar Integration** — Appointments auto-added to Google Calendar
+- **Multi-channel Notifications** — Confirmation via Gmail; doctor alerts via Slack
+- **MCP Protocol** — Structured tool communication between agent and backend services
 
 ---
 
-## Tech Stack
+## Project Structure
 
-| Layer | Tech |
-|-------|------|
-| Frontend | React 18 + Vite + Tailwind CSS |
-| Backend | FastAPI + SQLAlchemy |
-| Database | PostgreSQL |
-| LLM | GPT-4o (tool-calling / function-calling) |
-| Calendar | Google Calendar API |
-| Email | Gmail API (patient confirmation) |
-| Notification | Slack Incoming Webhooks (doctor summary) |
-| Auth | JWT (patient / doctor roles) |
+```
+nidan/
+├── backend/
+│   ├── agent.py          # GPT-4o agentic logic + tool orchestration
+│   ├── auth.py           # Authentication
+│   ├── main.py           # FastAPI app + route definitions
+│   ├── mcp_tools.py      # MCP tool definitions
+│   ├── schemas.py        # Pydantic models
+│   ├── models/           # Database models
+│   ├── integrations/     # Google Calendar, Gmail, Slack clients
+│   ├── requirements.txt
+│   └── .env.example
+└── frontend/
+    ├── src/
+    ├── index.html
+    ├── vite.config.js
+    └── package.json
+```
 
 ---
 
-## Setup
+## Getting Started
 
 ### Prerequisites
-- Python 3.11+
+
+- Python 3.10+
 - Node.js 18+
-- PostgreSQL running locally
+- PostgreSQL
+- OpenAI API key
+- Google Cloud project (Calendar + Gmail APIs enabled)
+- Slack Bot token
 
-### 1. Clone & configure backend
+### Backend Setup
 
 ```bash
 cd backend
-cp .env.example .env
-# Fill in: DATABASE_URL, OPENAI_API_KEY, SLACK_WEBHOOK_URL, Google OAuth creds
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
+cp .env.example .env      # Fill in your credentials
+uvicorn main:app --reload
 ```
 
-### 2. Run backend
-
-```bash
-cd backend
-uvicorn main:app --reload --port 8000
-```
-
-### 3. Seed sample data (first time only)
-
-```bash
-curl -X POST http://localhost:8000/seed
-```
-
-This creates:
-- 4 doctors (Dr. Ahuja, Dr. Sharma, Dr. Gupta, Dr. Singh)
-- 1 sample patient
-- 7 days × 7 daily slots per doctor
-
-### 4. Run frontend
+### Frontend Setup
 
 ```bash
 cd frontend
 npm install
 npm run dev
-# → http://localhost:5173
 ```
 
----
+### Environment Variables
 
-## Sample Prompts
-
-### Scenario 1 — Patient Appointment Booking
-
-| Prompt | What happens |
-|--------|-------------|
-| `"Show me available doctors"` | `list_doctors` tool called |
-| `"Check Dr. Ahuja's availability tomorrow morning"` | `check_doctor_availability` with date + time filter |
-| `"Book the 10 AM slot"` | `book_appointment` → Calendar event + Gmail confirmation |
-| `"Cancel my appointment"` | `cancel_appointment` |
-
-**Multi-turn example:**
+```env
+OPENAI_API_KEY=your_openai_key
+DATABASE_URL=postgresql://user:password@localhost:5432/nidan
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
+SLACK_BOT_TOKEN=your_slack_token
+SLACK_CHANNEL_ID=your_channel_id
 ```
-User:  "Check Dr. Ahuja's availability for Friday afternoon."
-AI:    "Here are the available slots: 2:00 PM, 3:00 PM, 4:00 PM"
-User:  "Book the 3 PM slot."
-AI:    "Done! Your appointment with Dr. Ahuja is confirmed for Friday 3:00 PM..."
-```
-
-### Scenario 2 — Doctor Summary
-
-| Prompt | What happens |
-|--------|-------------|
-| `"How many patients do I have today?"` | `get_doctor_summary(period=today)` → Slack notification |
-| `"How many appointments tomorrow?"` | `get_doctor_summary(period=tomorrow)` |
-| `"How many patients with fever this week?"` | `get_doctor_summary(period=this_week, filter_symptom=fever)` |
-| `"Give me yesterday's summary"` | `get_doctor_summary(period=yesterday)` |
 
 ---
 
 ## API Endpoints
 
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| POST | `/auth/register` | — | Register patient or doctor |
-| POST | `/auth/login` | — | Login → JWT |
-| GET | `/doctors` | — | List doctors |
-| GET | `/doctors/{id}/slots` | — | Available slots |
-| POST | `/chat/patient` | patient | Agent chat (Scenario 1) |
-| POST | `/chat/doctor` | doctor | Agent chat (Scenario 2) |
-| POST | `/doctor/summary` | doctor | Button-triggered summary |
-| GET | `/appointments/mine` | patient | Patient's appointments |
-| GET | `/doctor/appointments` | doctor | Doctor's schedule |
-| GET | `/chat/history` | any | Session history |
-| DELETE | `/chat/session` | any | Clear session |
-| POST | `/seed` | — | Seed dev data |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/chat/patient` | Patient conversation with AI agent |
+| POST | `/chat/doctor` | Doctor-side conversation interface |
 
 ---
 
-## Google OAuth Setup (for Calendar + Gmail)
+## License
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a project → Enable **Google Calendar API** and **Gmail API**
-3. Create OAuth 2.0 credentials (web application)
-4. Add `http://localhost:8000/auth/google/callback` as redirect URI
-5. Copy `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` to `.env`
-
-> **Note:** Without Google credentials, the app still works fully — appointments are booked in PostgreSQL, Calendar/Gmail steps are gracefully skipped.
+MIT License — feel free to use and modify.
 
 ---
 
-## Slack Webhook Setup
+## Author
 
-1. Go to your Slack workspace → Apps → Incoming Webhooks
-2. Create a new webhook for a channel
-3. Copy the webhook URL to `SLACK_WEBHOOK_URL` in `.env`
-
----
-
-## Demo Credentials (after seeding)
-
-| Role | Email | Password |
-|------|-------|----------|
-| Patient | patient@test.com | patient123 |
-| Doctor | priya@clinic.com | doctor123 |
-
----
-
-## Bonus Features Implemented
-
-- ✅ Role-based login (patient vs doctor JWT)
-- ✅ Multi-turn conversation with session history
-- ✅ Prompt history display in chat
-- ✅ Quick report buttons on doctor dashboard
-- ✅ Tool call indicators shown in UI
-- ✅ Appointment confirmation badge with Calendar status
-- ✅ Symptom-based filtering in summary queries
+**Divyansh Maurya**
+- GitHub: [@draccs2211](https://github.com/draccs2211)
+- LinkedIn: [divyanshmaurya-42a25735b](https://linkedin.com/in/divyanshmaurya-42a25735b)
