@@ -1,12 +1,47 @@
-# NIDAN — Agentic Doctor Appointment System
+# निदान — Nidan
 
-> Full-stack agentic AI application for intelligent doctor appointment booking and patient-doctor communication.
+> **Sahi waqt par, sahi doctor.**  
+> An AI-powered doctor appointment and reporting system built with GPT-4o tool-calling, FastAPI, MCP architecture, React, and PostgreSQL.
 
 ---
 
-## Overview
+## What is Nidan?
 
-NIDAN is an agentic AI system that handles doctor appointment scheduling through natural language. Patients and doctors interact via a conversational interface powered by GPT-4o tool-calling, which autonomously checks availability, books appointments, sends confirmations, and notifies relevant parties — all without manual coordination.
+Nidan (निदान) is a full-stack agentic AI application that allows:
+
+- **Patients** to book doctor appointments using plain natural language
+- **Doctors** to query their appointment data and receive summarized reports via Slack
+
+The system demonstrates true agentic behavior — the LLM (GPT-4o) decides which tools to call, when to call them, and how to chain them together to fulfill a user's intent across multiple conversation turns.
+
+---
+
+## Architecture
+
+```
+React Frontend (Vite)
+       │
+       ▼
+FastAPI Backend  ──►  GPT-4o (tool-calling)
+       │                     │
+       │         ┌───────────┼───────────────┐
+       │         ▼           ▼               ▼
+       │  check_availability  book_appointment  get_doctor_summary
+       │         │           │               │
+       ▼         ▼           ▼               ▼
+  PostgreSQL  PostgreSQL  Google Calendar  PostgreSQL
+                           + Gmail API      + Slack
+```
+
+### MCP Tools (defined in `mcp_tools.py`)
+
+| Tool | Description |
+|------|-------------|
+| `check_doctor_availability` | Queries live slots from DB by doctor name, specialization, date, time preference |
+| `book_appointment` | Books slot in DB, creates Google Calendar event, sends Gmail confirmation |
+| `get_doctor_summary` | Aggregates appointment stats by period with optional symptom filter |
+| `list_doctors` | Lists all doctors with specialization and fee |
+| `cancel_appointment` | Cancels appointment and frees the slot |
 
 ---
 
@@ -14,40 +49,37 @@ NIDAN is an agentic AI system that handles doctor appointment scheduling through
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React (Vite) + Tailwind CSS |
-| Backend | FastAPI (Python) |
-| AI Agent | GPT-4o with Tool Calling |
-| Protocol | MCP (Model Context Protocol) |
+| Frontend | React 18, Vite, Tailwind CSS |
+| Backend | FastAPI, SQLAlchemy |
 | Database | PostgreSQL |
+| LLM | GPT-4o (OpenAI function-calling) |
 | Calendar | Google Calendar API |
-| Notifications | Gmail + Slack |
-
----
-
-## Architecture
-
-```
-React (Vite)
-├── POST /chat/patient  ──►  FastAPI
-└── POST /chat/doctor   ──►  FastAPI
-                                └──► GPT-4o (tool-calling)
-                                        ├── check_doctor_availability  ──► PostgreSQL
-                                        ├── book_appointment           ──► PostgreSQL
-                                        ├── send_confirmation          ──► Gmail
-                                        ├── add_to_calendar            ──► Google Calendar
-                                        └── notify_doctor              ──► Slack
-```
+| Email | Gmail API |
+| Notifications | Slack Incoming Webhooks |
+| Auth | JWT (role-based: patient / doctor) |
 
 ---
 
 ## Features
 
-- **Conversational Booking** — Patients describe their symptoms/needs in natural language; the agent handles the rest
-- **Agentic Tool Calling** — GPT-4o autonomously calls backend tools to check slots, book, and confirm
-- **Dual Interface** — Separate chat flows for patients and doctors
-- **Calendar Integration** — Appointments auto-added to Google Calendar
-- **Multi-channel Notifications** — Confirmation via Gmail; doctor alerts via Slack
-- **MCP Protocol** — Structured tool communication between agent and backend services
+### Scenario 1 — Patient Appointment Booking
+- Natural language booking: *"Book an appointment with Dr. Ahuja tomorrow morning"*
+- AI parses intent, checks live availability, confirms slot, books in DB
+- Google Calendar event created + Gmail confirmation sent to patient
+- Multi-turn conversation — patient can say *"actually book 3 PM instead"* and the AI understands context
+
+### Scenario 2 — Doctor Summary Reports
+- Natural language queries: *"How many patients with fever this week?"*
+- AI calls `get_doctor_summary` with correct period and symptom filter
+- Summary rendered in chat + sent to doctor's Slack channel automatically
+- Quick report buttons on dashboard for one-click reports
+
+### Bonus Features Implemented
+- Role-based JWT auth (patient vs doctor — separate UIs)
+- Multi-turn conversation with session history per user
+- Tool call badges shown in UI for transparency
+- Appointment status sidebar (patient)
+- Upcoming appointments panel (doctor)
 
 ---
 
@@ -56,47 +88,100 @@ React (Vite)
 ```
 nidan/
 ├── backend/
-│   ├── agent.py          # GPT-4o agentic logic + tool orchestration
-│   ├── auth.py           # Authentication
-│   ├── main.py           # FastAPI app + route definitions
-│   ├── mcp_tools.py      # MCP tool definitions
-│   ├── schemas.py        # Pydantic models
-│   ├── models/           # Database models
-│   ├── integrations/     # Google Calendar, Gmail, Slack clients
-│   ├── requirements.txt
-│   └── .env.example
-└── frontend/
-    ├── src/
-    ├── index.html
-    ├── vite.config.js
-    └── package.json
+│   ├── integrations/
+│   │   ├── calendar.py       # Google Calendar API
+│   │   ├── gmail.py          # Gmail confirmation emails
+│   │   └── slack.py          # Slack Block Kit notifications
+│   ├── models/
+│   │   └── database.py       # SQLAlchemy models
+│   ├── agent.py              # GPT-4o tool-calling loop + session history
+│   ├── auth.py               # JWT auth + role guards
+│   ├── main.py               # FastAPI routes
+│   ├── mcp_tools.py          # MCP tool schemas + handlers
+│   ├── schemas.py            # Pydantic models
+│   └── requirements.txt
+│
+├── frontend/
+│   └── src/
+│       ├── components/
+│       │   └── ChatWindow.jsx
+│       ├── pages/
+│       │   ├── LoginPage.jsx
+│       │   ├── PatientPage.jsx
+│       │   └── DoctorPage.jsx
+│       ├── App.jsx
+│       ├── AuthContext.jsx
+│       └── api.js
+│
+└── README.md
 ```
 
 ---
 
-## Getting Started
+## Local Setup
 
 ### Prerequisites
-
-- Python 3.10+
+- Python 3.11+
 - Node.js 18+
 - PostgreSQL
-- OpenAI API key
-- Google Cloud project (Calendar + Gmail APIs enabled)
-- Slack Bot token
 
-### Backend Setup
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/yourusername/nidan.git
+cd nidan
+```
+
+### 2. Backend setup
 
 ```bash
 cd backend
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+venv\Scripts\activate        # Windows
+source venv/bin/activate     # Mac/Linux
+
 pip install -r requirements.txt
-cp .env.example .env      # Fill in your credentials
-uvicorn main:app --reload
+cp .env.example .env
 ```
 
-### Frontend Setup
+Edit `.env` and fill in:
+
+```env
+DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/nidan_db
+OPENAI_API_KEY=sk-your-openai-key
+
+# Optional
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GMAIL_SENDER_EMAIL=...
+```
+
+### 3. Create database
+
+```bash
+psql -U postgres
+CREATE DATABASE nidan_db;
+\q
+```
+
+### 4. Run backend
+
+```bash
+uvicorn main:app --reload --port 8000
+```
+
+### 5. Seed sample data
+
+```bash
+# Windows PowerShell
+Invoke-WebRequest -Uri http://localhost:8000/seed -Method POST -UseBasicParsing
+
+# Mac/Linux
+curl -X POST http://localhost:8000/seed
+```
+
+### 6. Run frontend
 
 ```bash
 cd frontend
@@ -104,36 +189,63 @@ npm install
 npm run dev
 ```
 
-### Environment Variables
+Open **http://localhost:5173**
 
-```env
-OPENAI_API_KEY=your_openai_key
-DATABASE_URL=postgresql://user:password@localhost:5432/nidan
-GOOGLE_CLIENT_ID=your_google_client_id
-GOOGLE_CLIENT_SECRET=your_google_client_secret
-SLACK_BOT_TOKEN=your_slack_token
-SLACK_CHANNEL_ID=your_channel_id
+---
+
+## Demo Credentials
+
+| Role | Email | Password |
+|------|-------|----------|
+| Patient | patient@test.com | patient123 |
+| Doctor | priya@clinic.com | doctor123 |
+
+---
+
+## Sample Prompts
+
+### Patient
+```
+Show me all available doctors
+Book an appointment with Dr. Ahuja tomorrow morning
+Check Dr. Sharma's availability this Friday afternoon
+Cancel my appointment
+```
+
+### Multi-turn example
+```
+User:  Check Dr. Ahuja's availability for tomorrow
+AI:    Available slots: 9 AM, 10 AM, 11 AM, 2 PM...
+User:  Book the 10 AM slot
+AI:    Done! Appointment confirmed for tomorrow at 10:00 AM
+```
+
+### Doctor
+```
+How many patients do I have today?
+How many appointments this week?
+How many patients with fever this week?
+Give me yesterday's summary
 ```
 
 ---
 
 ## API Endpoints
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/chat/patient` | Patient conversation with AI agent |
-| POST | `/chat/doctor` | Doctor-side conversation interface |
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/auth/register` | — | Register patient or doctor |
+| POST | `/auth/login` | — | Login, returns JWT |
+| GET | `/doctors` | — | List all doctors |
+| GET | `/doctors/{id}/slots` | — | Available slots |
+| POST | `/chat/patient` | Patient | Agentic chat — Scenario 1 |
+| POST | `/chat/doctor` | Doctor | Agentic chat — Scenario 2 |
+| POST | `/doctor/summary` | Doctor | Button-triggered summary |
+| GET | `/appointments/mine` | Patient | Patient's appointments |
+| GET | `/doctor/appointments` | Doctor | Doctor's schedule |
+| DELETE | `/chat/session` | Any | Clear conversation session |
+| POST | `/seed` | — | Seed demo data |
 
 ---
 
-## License
-
-MIT License — feel free to use and modify.
-
----
-
-## Author
-
-**Divyansh Maurya**
-- GitHub: [@draccs2211](https://github.com/draccs2211)
-- LinkedIn: [divyanshmaurya-42a25735b](https://linkedin.com/in/divyanshmaurya-42a25735b)
+*Built as part of Full-Stack Developer Intern Assignment — Agentic AI with MCP*
