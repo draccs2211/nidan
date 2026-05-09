@@ -248,4 +248,4 @@ Give me yesterday's summary
 
 ---
 
-*Built as part of Full-Stack Developer Intern Assignment — Agentic AI with MCP*
+
