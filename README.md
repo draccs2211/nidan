@@ -1,47 +1,61 @@
 # निदान — Nidan
 
-> **Sahi waqt par, sahi doctor.**  
-> An AI-powered doctor appointment and reporting system built with GPT-4o tool-calling, FastAPI, MCP architecture, React, and PostgreSQL.
+> **Sahi waqt par, sahi doctor.**
+> AI-powered doctor appointment and reporting system with proper MCP client-server architecture.
 
 ---
 
-## What is Nidan?
+## Overview
 
-Nidan (निदान) is a full-stack agentic AI application that allows:
+Nidan is a full-stack agentic AI application built for the Full-Stack Developer Intern Assignment (Agentic AI with MCP). It demonstrates true agentic behavior where GPT-4o dynamically discovers and invokes MCP tools to fulfill user intents across multi-turn conversations.
 
-- **Patients** to book doctor appointments using plain natural language
-- **Doctors** to query their appointment data and receive summarized reports via Slack
+**Two core scenarios:**
 
-The system demonstrates true agentic behavior — the LLM (GPT-4o) decides which tools to call, when to call them, and how to chain them together to fulfill a user's intent across multiple conversation turns.
+- **Patients** book doctor appointments using plain natural language
+- **Doctors** query appointment data and receive AI-generated reports via Slack
 
 ---
 
-## Architecture
+## MCP Architecture
+
+This implementation strictly follows the MCP specification:
 
 ```
-React Frontend (Vite)
-       │
-       ▼
-FastAPI Backend  ──►  GPT-4o (tool-calling)
-       │                     │
-       │         ┌───────────┼───────────────┐
-       │         ▼           ▼               ▼
-       │  check_availability  book_appointment  get_doctor_summary
-       │         │           │               │
-       ▼         ▼           ▼               ▼
-  PostgreSQL  PostgreSQL  Google Calendar  PostgreSQL
-                           + Gmail API      + Slack
+┌─────────────────────────────────────────────────────────┐
+│                    MCP CLIENT (agent.py)                 │
+│                                                          │
+│  1. session.list_tools()  →  dynamic tool discovery      │
+│  2. GPT-4o decides which tool to call                    │
+│  3. session.call_tool()   →  routed via MCP protocol     │
+└──────────────────────┬──────────────────────────────────-┘
+                       │  HTTP (Streamable HTTP Transport)
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│                  MCP SERVER (mcp_server.py)              │
+│                                                          │
+│  FastMCP — official MCP Python SDK                       │
+│  Mounted at /mcp via ASGI                                │
+│                                                          │
+│  @mcp.tool() check_doctor_availability                   │
+│  @mcp.tool() book_appointment                            │
+│  @mcp.tool() get_doctor_summary                          │
+│  @mcp.tool() list_doctors                                │
+│  @mcp.tool() cancel_appointment                          │
+└──────────────────────┬──────────────────────────────────-┘
+                       │
+                       ▼
+              PostgreSQL Database
 ```
 
-### MCP Tools (defined in `mcp_tools.py`)
+**MCP Requirements Satisfied:**
 
-| Tool | Description |
-|------|-------------|
-| `check_doctor_availability` | Queries live slots from DB by doctor name, specialization, date, time preference |
-| `book_appointment` | Books slot in DB, creates Google Calendar event, sends Gmail confirmation |
-| `get_doctor_summary` | Aggregates appointment stats by period with optional symptom filter |
-| `list_doctors` | Lists all doctors with specialization and fee |
-| `cancel_appointment` | Cancels appointment and frees the slot |
+| Requirement | Implementation |
+|-------------|---------------|
+| MCP client-server protocol | `streamablehttp_client` transport in `agent.py` |
+| Dynamic tool discovery at runtime | `session.list_tools()` called every request |
+| No hardcoded tool schemas | Schemas fetched from MCP server at runtime |
+| LLM-driven orchestration | GPT-4o decides tool calls — no if/else routing |
+| Clear Client/Server/Tool separation | `agent.py` (client) / `mcp_server.py` (server) / `@mcp.tool()` (tools) |
 
 ---
 
@@ -50,13 +64,14 @@ FastAPI Backend  ──►  GPT-4o (tool-calling)
 | Layer | Technology |
 |-------|-----------|
 | Frontend | React 18, Vite, Tailwind CSS |
-| Backend | FastAPI, SQLAlchemy |
+| Backend | FastAPI, SQLAlchemy, Python 3.11 |
 | Database | PostgreSQL |
 | LLM | GPT-4o (OpenAI function-calling) |
+| MCP | Official MCP Python SDK (`mcp`, `fastmcp`) |
 | Calendar | Google Calendar API |
 | Email | Gmail API |
 | Notifications | Slack Incoming Webhooks |
-| Auth | JWT (role-based: patient / doctor) |
+| Auth | JWT — role-based (patient / doctor) |
 
 ---
 
@@ -64,22 +79,22 @@ FastAPI Backend  ──►  GPT-4o (tool-calling)
 
 ### Scenario 1 — Patient Appointment Booking
 - Natural language booking: *"Book an appointment with Dr. Ahuja tomorrow morning"*
-- AI parses intent, checks live availability, confirms slot, books in DB
-- Google Calendar event created + Gmail confirmation sent to patient
-- Multi-turn conversation — patient can say *"actually book 3 PM instead"* and the AI understands context
+- MCP client calls `tools/list` → discovers `check_doctor_availability` → calls it via MCP protocol
+- Slot confirmed → `book_appointment` tool called → DB updated → Google Calendar event created → Gmail sent
+- Full multi-turn context: *"Actually book 3 PM instead"* works without repeating intent
 
 ### Scenario 2 — Doctor Summary Reports
-- Natural language queries: *"How many patients with fever this week?"*
-- AI calls `get_doctor_summary` with correct period and symptom filter
-- Summary rendered in chat + sent to doctor's Slack channel automatically
+- Natural language: *"How many patients with fever this week?"*
+- MCP client routes to `get_doctor_summary` with `period=this_week` and `filter_symptom=fever`
+- Summary rendered in chat + pushed to Slack automatically
 - Quick report buttons on dashboard for one-click reports
 
-### Bonus Features Implemented
-- Role-based JWT auth (patient vs doctor — separate UIs)
+### Bonus Features
+- Role-based JWT authentication (patient vs doctor — separate UIs)
 - Multi-turn conversation with session history per user
 - Tool call badges shown in UI for transparency
-- Appointment status sidebar (patient)
-- Upcoming appointments panel (doctor)
+- Prompt history tracking
+- Appointment sidebar (patient) and upcoming panel (doctor)
 
 ---
 
@@ -89,17 +104,20 @@ FastAPI Backend  ──►  GPT-4o (tool-calling)
 nidan/
 ├── backend/
 │   ├── integrations/
+│   │   ├── __init__.py
 │   │   ├── calendar.py       # Google Calendar API
-│   │   ├── gmail.py          # Gmail confirmation emails
-│   │   └── slack.py          # Slack Block Kit notifications
+│   │   ├── gmail.py          # Gmail patient confirmations
+│   │   └── slack.py          # Slack doctor notifications
 │   ├── models/
+│   │   ├── __init__.py
 │   │   └── database.py       # SQLAlchemy models
-│   ├── agent.py              # GPT-4o tool-calling loop + session history
+│   ├── agent.py              # MCP CLIENT — tools/list + session.call_tool()
 │   ├── auth.py               # JWT auth + role guards
-│   ├── main.py               # FastAPI routes
-│   ├── mcp_tools.py          # MCP tool schemas + handlers
-│   ├── schemas.py            # Pydantic models
-│   └── requirements.txt
+│   ├── main.py               # FastAPI app + MCP server mount + lifespan
+│   ├── mcp_server.py         # MCP SERVER — FastMCP + @mcp.tool() decorators
+│   ├── schemas.py            # Pydantic request/response models
+│   ├── requirements.txt
+│   └── .env.example
 │
 ├── frontend/
 │   └── src/
@@ -128,7 +146,7 @@ nidan/
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/yourusername/nidan.git
+git clone https://github.com/draccs2211/nidan.git
 cd nidan
 ```
 
@@ -137,6 +155,8 @@ cd nidan
 ```bash
 cd backend
 python -m venv venv
+
+# Activate
 venv\Scripts\activate        # Windows
 source venv/bin/activate     # Mac/Linux
 
@@ -144,13 +164,13 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Edit `.env` and fill in:
+Edit `.env`:
 
 ```env
 DATABASE_URL=postgresql://postgres:YOUR_PASSWORD@localhost:5432/nidan_db
 OPENAI_API_KEY=sk-your-openai-key
 
-# Optional
+# Optional integrations
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
@@ -169,6 +189,13 @@ CREATE DATABASE nidan_db;
 
 ```bash
 uvicorn main:app --reload --port 8000
+```
+
+Expected output:
+```
+Database tables created/verified.
+MCP Server mounted at /mcp
+[MCP Client] Discovered 5 tools via tools/list: ['list_doctors', 'check_doctor_availability', ...]
 ```
 
 ### 5. Seed sample data
@@ -215,9 +242,9 @@ Cancel my appointment
 ### Multi-turn example
 ```
 User:  Check Dr. Ahuja's availability for tomorrow
-AI:    Available slots: 9 AM, 10 AM, 11 AM, 2 PM...
+AI:    Available slots: 9 AM, 10 AM, 11 AM...
 User:  Book the 10 AM slot
-AI:    Done! Appointment confirmed for tomorrow at 10:00 AM
+AI:    Confirmed — appointment booked for tomorrow at 10:00 AM
 ```
 
 ### Doctor
@@ -238,14 +265,23 @@ Give me yesterday's summary
 | POST | `/auth/login` | — | Login, returns JWT |
 | GET | `/doctors` | — | List all doctors |
 | GET | `/doctors/{id}/slots` | — | Available slots |
+| GET/POST | `/mcp` | — | MCP server endpoint (tools/list, tools/call) |
 | POST | `/chat/patient` | Patient | Agentic chat — Scenario 1 |
 | POST | `/chat/doctor` | Doctor | Agentic chat — Scenario 2 |
-| POST | `/doctor/summary` | Doctor | Button-triggered summary |
+| POST | `/doctor/summary` | Doctor | Button-triggered summary + Slack |
 | GET | `/appointments/mine` | Patient | Patient's appointments |
-| GET | `/doctor/appointments` | Doctor | Doctor's schedule |
+| GET | `/doctor/appointments` | Doctor | Doctor's upcoming schedule |
 | DELETE | `/chat/session` | Any | Clear conversation session |
 | POST | `/seed` | — | Seed demo data |
+| GET | `/health` | — | Health check |
 
 ---
 
+## Demo
 
+- **GitHub:** https://github.com/draccs2211/nidan
+- **Demo Video:** https://youtu.be/QbxxRX4Q8uQ
+
+---
+
+*Built for Full-Stack Developer Intern Assignment — Agentic AI with MCP*
