@@ -18,6 +18,7 @@ def get_db():
 
 mcp = FastMCP(
     "Nidan MCP Server",
+    streamable_http_path="/",
     instructions="""
     You are the Nidan medical appointment assistant.
     Use these tools to help patients book appointments and doctors get summaries.
