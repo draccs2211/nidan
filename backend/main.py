@@ -1,13 +1,11 @@
-
-
 import os
+import contextlib
 from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-import pytz
 
 from models.database import get_db, create_tables, User, Doctor, AvailabilitySlot, Appointment
 from schemas import (
@@ -22,17 +20,27 @@ from mcp_server import mcp
 from dotenv import load_dotenv
 load_dotenv()
 
-IST = pytz.timezone("Asia/Kolkata")
+
+# ── Lifespan: starts DB + MCP session manager ────────────────────────────────
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    create_tables()
+    print("Database tables created/verified.")
+    print("MCP Server mounted at /mcp")
+    async with mcp.session_manager.run():
+        yield
+
 
 app = FastAPI(
     title="Nidan — Agentic Doctor Appointment AI",
     description="MCP-powered agentic appointment system using GPT-4o + proper MCP protocol",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
-# Mount MCP server — exposes /mcp endpoint with tools/list, tools/call
-mcp_app = mcp.get_asgi_app()
-app.mount("/mcp", mcp_app)
+# Mount MCP server — exposes /mcp with tools/list and tools/call
+app.mount("/mcp", mcp.streamable_http_app())
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,13 +49,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def startup():
-    create_tables()
-    print("Database tables created/verified.")
-    print("MCP Server mounted at /mcp")
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -147,7 +148,7 @@ def get_doctor_slots(doctor_id: int, db: Session = Depends(get_db)):
     ]
 
 
-# ── Patient Chat (async — MCP client) ─────────────────────────────────────────
+# ── Patient Chat ──────────────────────────────────────────────────────────────
 
 @app.post("/chat/patient", response_model=ChatResponse)
 async def patient_chat(
@@ -179,7 +180,7 @@ async def patient_chat(
     )
 
 
-# ── Doctor Chat (async — MCP client) ─────────────────────────────────────────
+# ── Doctor Chat ───────────────────────────────────────────────────────────────
 
 @app.post("/chat/doctor", response_model=ChatResponse)
 async def doctor_chat(
@@ -213,7 +214,7 @@ async def doctor_chat(
     )
 
 
-# ── Doctor Summary Button (async — MCP client) ────────────────────────────────
+# ── Doctor Summary Button ─────────────────────────────────────────────────────
 
 @app.post("/doctor/summary", response_model=SummaryResponse)
 async def doctor_summary(
@@ -329,10 +330,10 @@ def seed_data(db: Session = Depends(get_db)):
     now = datetime.now()
 
     doctor_data = [
-        ("Dr. Priya Ahuja",   "priya@clinic.com",  "Cardiologist",     15, 800.0),
-        ("Dr. Rahul Sharma",  "rahul@clinic.com",  "Dermatologist",     8, 600.0),
-        ("Dr. Meena Gupta",   "meena@clinic.com",  "General Medicine", 12, 400.0),
-        ("Dr. Arjun Singh",   "arjun@clinic.com",  "Orthopedic",       10, 700.0),
+        ("Dr. Priya Ahuja",  "priya@clinic.com", "Cardiologist",    15, 800.0),
+        ("Dr. Rahul Sharma", "rahul@clinic.com", "Dermatologist",    8, 600.0),
+        ("Dr. Meena Gupta",  "meena@clinic.com", "General Medicine", 12, 400.0),
+        ("Dr. Arjun Singh",  "arjun@clinic.com", "Orthopedic",       10, 700.0),
     ]
 
     for name, email, spec, exp, fee in doctor_data:
